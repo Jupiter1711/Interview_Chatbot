@@ -1,0 +1,14 @@
+venv/
+.venv/
+env/
+.env_name/
+
+.env
+.env.local
+.streamlit/secrets.toml
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdf
