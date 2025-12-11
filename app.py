@@ -18,7 +18,7 @@ st.set_page_config(
 # --- Giao diện --- 
 st.markdown("""
 <style>
-    /* --- 1. CỐ ĐỊNH NỀN CHÍNH (QUAN TRỌNG) --- */
+    /* --- 1. CỐ ĐỊNH NỀN CHÍNH --- */
     .stApp {
         /* Dùng fixed để nền không bao giờ bị trôi khi cuộn */
         background: radial-gradient(circle at 50% 10%, #1a1a1a 0%, #000000 100%) !important;
@@ -27,7 +27,7 @@ st.markdown("""
         color: #e0e0e0;
     }
 
-    /* --- 2. XỬ LÝ THANH CHAT (KHẮC PHỤC LỖI MÀU NỀN) --- */
+    /* --- 2. XỬ LÝ THANH CHAT --- */
     
     /* Target lớp bao ngoài cùng dưới đáy */
     div[data-testid="stBottom"] {
@@ -130,7 +130,8 @@ def init_db():
     c.execute('''
          CREATE TABLE IF NOT EXISTS users (
              username TEXT PRIMARY KEY,
-             password TEXT
+             password TEXT,
+             token TEXT
         )
     ''')
 
@@ -185,6 +186,35 @@ def login_user(username, password):
             return True
     return False
 
+def update_user_token(username):
+    """Tạo token mới cho username khi đăng nhập thành công"""
+    new_token = str(uuid.uuid4())
+    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute('UPDATE users SET token = ? WHERE username = ?', (new_token, username))
+    conn.commit()
+    conn.close()
+    return new_token
+
+def get_user_by_token(token): 
+    """Tìm user dựa vào token (tự động đăng nhập)"""
+    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute('SELECT username FROM users WHERE token = ?', (token,))
+    data = c.fetchall()
+    conn.close()
+    if data: 
+        return data[0][0]
+    return None
+
+def logout_user(username):
+    """Xóa token khi đăng xuất"""
+    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute('UPDATE users SET token = NULL WHERE username = ?', (username,))
+    conn.commit()
+    conn.close()
+
 # --- Các hàm lấy lịch sử của đoạn chat --- 
 def save_message_to_db(username, session_id, role, content): 
     conn = sqlite3.connect('interview_system.db', check_same_thread=False)
@@ -234,6 +264,19 @@ if "interview_active" not in st.session_state:
 if "feedback_mode" not in st.session_state:
     st.session_state.feedback_mode = False
 
+# --- Logic tự động đăng nhập --- 
+query_params = st.query_params
+url_token = query_params.get("token")
+
+if not st.session_state.username and url_token:
+    found_user = get_user_by_token(url_token)
+    if found_user:
+        st.session_state.username = found_user
+        st.toast(f"Đã khôi phục phiên làm việc của {found_user}")
+    else: 
+        if "token" in st.query_params:
+            del st.query_params["token"]
+
 # --- Màn hình Đăng nhập
 def login_page(): 
     st.title("Đăng nhập tài khoản")
@@ -245,6 +288,9 @@ def login_page():
         if st.button("Đăng Nhập"):
             if login_user(username, password):
                 st.session_state.username = username
+                # Tạo và lưu token
+                token = update_user_token(username)
+                st.query_params["token"] = token # Gắn lên URL
                 st.success(f"Chúc mừng {username} quay trở lại!")
                 st.rerun()
             else: 
@@ -337,6 +383,9 @@ else:
     with st.sidebar:
         st.write(f"Xin chào, **{st.session_state.username}**!")
         if st.button("Đăng xuất"): 
+            logout_user(st.session_state.username) # Xóa token trong URL ở DB
+            if "token" in st.query_params:
+                del st.query_params["token"]
             st.session_state.username = None
             st.session_state.interview_active = False
             st.rerun()
