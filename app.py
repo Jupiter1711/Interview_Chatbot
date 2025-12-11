@@ -18,18 +18,105 @@ st.set_page_config(
 # --- Giao diện --- 
 st.markdown("""
 <style>
-    .stChatMessage {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
+    /* --- 1. CỐ ĐỊNH NỀN CHÍNH (QUAN TRỌNG) --- */
+    .stApp {
+        /* Dùng fixed để nền không bao giờ bị trôi khi cuộn */
+        background: radial-gradient(circle at 50% 10%, #1a1a1a 0%, #000000 100%) !important;
+        background-attachment: fixed !important;
+        background-size: cover !important;
+        color: #e0e0e0;
     }
+
+    /* --- 2. XỬ LÝ THANH CHAT (KHẮC PHỤC LỖI MÀU NỀN) --- */
+    
+    /* Target lớp bao ngoài cùng dưới đáy */
+    div[data-testid="stBottom"] {
+        background-color: transparent !important;
+        background-image: none !important; /* Xóa gradient mặc định nếu có */
+        border: none !important;
+        box-shadow: none !important;
+    }
+
+    /* Target lớp con trực tiếp bên trong (thường là thủ phạm gây ra vệt màu) */
+    div[data-testid="stBottom"] > div {
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+
+    /* Tùy chỉnh ô nhập liệu (Viên thuốc) */
+    div[data-testid="stChatInput"] {
+        background-color: rgba(20, 20, 20, 0.6) !important; /* Đen mờ 60% */
+        border: 1px solid rgba(255, 255, 255, 0.15) !important; /* Viền mỏng */
+        border-radius: 30px !important; /* Bo tròn */
+        backdrop-filter: blur(10px); /* Hiệu ứng kính mờ */
+        padding: 5px;
+    }
+
+    /* Màu chữ khi gõ */
+    div[data-testid="stChatInput"] textarea {
+        color: #ffffff !important;
+        caret-color: #ffffff !important;
+    }
+    
+    /* Hiệu ứng khi focus vào ô nhập */
+    div[data-testid="stChatInput"]:focus-within {
+        background-color: rgba(0, 0, 0, 0.8) !important;
+        border-color: #ffffff !important;
+        box-shadow: 0 0 15px rgba(255, 255, 255, 0.15) !important;
+    }
+
+    /* --- 3. CÁC THÀNH PHẦN KHÁC --- */
+    
+    /* Sidebar đen tuyền */
+    [data-testid="stSidebar"] {
+        background-color: #000000;
+        border-right: 1px solid #222;
+    }
+
+    /* Font chữ tiêu đề */
+    h1, h2, h3 {
+        color: #ffffff !important;
+        font-family: 'Helvetica Neue', sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    /* Input fields (Text input, Select box...) */
+    .stTextInput input, .stSelectbox div[data-baseweb="select"], .stRadio {
+        background-color: #0a0a0a !important;
+        color: white !important;
+        border: 1px solid #333 !important;
+        border-radius: 8px !important;
+    }
+
+    /* Buttons */
     .stButton button {
-        width: 100%;
-        border-radius: 20px;
+        background: linear-gradient(180deg, #333 0%, #000 100%);
+        color: white;
+        border: 1px solid #555;
+        border-radius: 8px;
+        text-transform: uppercase;
         font-weight: bold;
+        transition: 0.3s;
     }
-    .sidebar-content {
-        padding: 1rem;
+    .stButton button:hover {
+        border-color: #fff;
+        box-shadow: 0 0 10px rgba(255,255,255,0.2);
+    }
+
+    /* Chat Bubbles (Tin nhắn) */
+    .stChatMessage {
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+    }
+    .stChatMessage .stChatMessageAvatar {
+        background-color: #333 !important;
+    }
+
+    /* Ẩn Header mặc định */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
     }
 </style>
 """, unsafe_allow_html=True)
