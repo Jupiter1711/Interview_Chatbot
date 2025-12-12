@@ -52,19 +52,30 @@ st.markdown("""
         border-radius: 30px !important; /* Bo tròn */
         backdrop-filter: blur(10px); /* Hiệu ứng kính mờ */
         padding: 5px;
+        outline: none !important; 
+        box-shadow: none !important;
+    }
+
+    div[data-testid="stChatInput"] > div {
+        border: none !important;
+        box-shadow: none !important;
+        background-color: transparent !important;
+        outline: none !important;
     }
 
     /* Màu chữ khi gõ */
     div[data-testid="stChatInput"] textarea {
         color: #ffffff !important;
         caret-color: #ffffff !important;
+        padding: 10px 15px !important;
     }
     
     /* Hiệu ứng khi focus vào ô nhập */
     div[data-testid="stChatInput"]:focus-within {
         background-color: rgba(0, 0, 0, 0.8) !important;
         border-color: #ffffff !important;
-        box-shadow: 0 0 15px rgba(255, 255, 255, 0.15) !important;
+        box-shadow: 0 0 15px rgba(255, 255, 255, 0.2) !important;
+        outline: none !important; /* Chặn Streamlit tự thêm viền màu */
     }
 
     /* --- 3. CÁC THÀNH PHẦN KHÁC --- */
@@ -89,6 +100,7 @@ st.markdown("""
         color: white !important;
         border: 1px solid #333 !important;
         border-radius: 8px !important;
+        padding: 15px !important;
     }
 
     /* Buttons */
@@ -230,13 +242,24 @@ def get_user_sessions(username):
 
 def load_history_by_session(session_id): 
     # Lấy tin nhắn cũ theo thứ tự thời gian
-    docs = db.collection("messages").where("session_id", "==", session_id)
-    messages = []
+    docs = db.collection("messages").where("session_id", "==", session_id).stream()
+    temp_msgs = []
     for doc in docs: 
         data = doc.to_dict()
-        messages.append((data["role"], data["content"]))
-    return messages
-
+        # Lấy timestamp, nếu không có thì gán giá trị nhỏ nhất
+        timestamp = data.get("timestamp", datetime.min)
+        
+        temp_msgs.append({
+            "role": data["role"], 
+            "content": data["content"],
+            "sort": timestamp # Dùng trường này để sắp xếp
+        })
+        
+    # Sắp xếp theo thời gian tăng dần (Cũ trước -> Mới sau)
+    temp_msgs.sort(key=lambda x: x["sort"], reverse=False)
+    
+    # Trả về định dạng đúng cho Streamlit
+    return [(m["role"], m["content"]) for m in temp_msgs]
 # --- Khởi tạo STATE ---
 if "username" not in st.session_state:
     st.session_state.username = None
@@ -266,33 +289,36 @@ if not st.session_state.username and url_token:
 
 # --- Màn hình Đăng nhập
 def login_page(): 
-    st.title("Đăng nhập tài khoản")
-    tab1, tab2 = st.tabs(['Đăng Nhập', 'Đăng Ký'])
-    
-    with tab1: 
-        username = st.text_input("Tên đăng nhập", key="login_user")
-        password = st.text_input("Mật khẩu", type="password", key ="login_pass")
-        if st.button("Đăng Nhập"):
-            if login_user(username, password):
-                st.session_state.username = username
-                # Tạo và lưu token
-                token = update_user_token(username)
-                st.query_params["token"] = token # Gắn lên URL
-                st.success(f"Chúc mừng {username} đã đến với AI Interview!")
-                st.rerun()
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2: 
+        tab1, tab2 = st.tabs(['Đăng Nhập', 'Đăng Ký'])
+        
+        with tab1: 
+            st.title("ĐĂNG NHẬP TÀI KHOẢN")
+            username = st.text_input("Tên đăng nhập", key="login_user")
+            password = st.text_input("Mật khẩu", type="password", key ="login_pass")
+            if st.button("Đăng Nhập"):
+                if login_user(username, password):
+                    st.session_state.username = username
+                    # Tạo và lưu token
+                    token = update_user_token(username)
+                    st.query_params["token"] = token # Gắn lên URL
+                    st.success(f"Chúc mừng {username} đã đến với AI Interview!")
+                    st.rerun()
+                else: 
+                    st.error("Tên đăng nhập hoặc mật khẩu không chính xác")
+        
+        with tab2:
+            st.title("ĐĂNG KÝ TÀI KHOẢN")
+            new_user = st.text_input("Tên đăng nhập mới", key="reg_user")
+            new_pass = st.text_input("Mật khẩu mới", key = "reg_pass")
+            if new_user and new_pass:
+                if add_user(new_user, new_pass):
+                    st.success("Tạo tài khoản thành công! Vui lòng chuyển sang tab Đăng nhập")
+                else:
+                    st.warning("Tên đăng nhập đã tồn tại")
             else: 
-                st.error("Tên đăng nhập hoặc mật khẩu không chính xác")
-    
-    with tab2:
-        new_user = st.text_input("Tên đăng nhập mới", key="reg_user")
-        new_pass = st.text_input("Mật khẩu mới", key = "reg_pass")
-        if new_user and new_pass:
-            if add_user(new_user, new_pass):
-                st.success("Tạo tài khoản thành công! Vui lòng chuyển sang tab Đăng nhập")
-            else:
-                st.warning("Tên đăng nhập đã tồn tại")
-        else: 
-            st.warning("Vui lòng nhập đủ thông tin đăng kí")
+                st.warning("Vui lòng nhập đủ thông tin đăng kí")
     
 # --- Logic Phỏng Vấn --- 
 
