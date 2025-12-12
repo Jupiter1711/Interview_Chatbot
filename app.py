@@ -4,6 +4,8 @@ import sqlite3
 import hashlib
 import uuid
 import os
+import firebase_admin
+from firebase_admin import credentials, firestore
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -121,134 +123,119 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Khởi tạo Database --- 
-def init_db():
-    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
-    c = conn.cursor()
+# --- Kết nối với Firebase --- 
+@st.cache_resource
+def get_db():
+    try: 
+        if not firebase_admin._apps:
+            if "firebase" in st.secrets: 
+                key_dict = dict(st.secrets["firebase"])
+                if "private_key" in key_dict: 
+                    key_dict["private_key"] = key_dict["private_key"].replace('\\n','\n')
+                cred = credentials.Certificate(key_dict)
+                firebase_admin.initialize_app(cred)
+            else: 
+                return None
+        return firestore.client()
+    except Exception as e:
+        print(f"Firebase Error: {e}") # In lỗi ra terminal để debug nếu cần
+        return None
+db = get_db()
 
-    # 1. Bảng user 
-    c.execute('''
-         CREATE TABLE IF NOT EXISTS users (
-             username TEXT PRIMARY KEY,
-             password TEXT,
-             token TEXT
-        )
-    ''')
+if db is None: 
+    st.error("Lỗi kết nối Firebase! Vui lòng kiểm tra lại!")
+    st.stop()
 
-    # 2. Bảng History 
-    c.execute('''
-         CREATE TABLE IF NOT EXISTS history (
-             id INTEGER PRIMARY KEY AUTOINCREMENT,
-             username TEXT,
-             session_id TEXT,
-             timestamp TEXT,
-             role TEXT,
-             content TEXT,
-             FOREIGN KEY(username) REFERENCES users(username)
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
+# --- Hàm mã hõa --- 
 def make_hash(password):
     """Mã hóa password bằng SHA256"""
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-def check_hashes(password, hashed_text):
-    """Kiểm tra có khớp mkhau không"""
-    if make_hash(password) == hashed_text:
-        return True
-    return False
+# def check_hashes(password, hashed_text):
+#     """Kiểm tra có khớp mkhau không"""
+#     if make_hash(password) == hashed_text:
+#         return True
+#     return False
 
 def add_user(username, password): 
-    """Tạo user mới"""
-    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
-    c = conn.cursor()
-    hashed_pw = make_hash(password)
-    try: 
-        c.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, hashed_pw))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False #Trùng username
-    finally:
-        conn.close()
-    
+    user_ref = db.collection("users").document(username)
+    if user_ref.get().exists:
+        return False
+    user_ref.set({
+        "password" : make_hash(password),
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "token": None
+    })
+    return True
+
 def login_user(username, password): 
     """Xác thực đăng nhập"""
-    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('SELECT password FROM users WHERE username = ?', (username,))
-    data = c.fetchall()
-    conn.close()
-    if data: 
-        if check_hashes(password, data[0][0]):
+    user_ref = db.collection("users").document(username)
+    doc = user_ref.get()
+    if doc.exists:
+        user_data = doc.to_dict()
+        if user_data.get("password") == make_hash(password):
             return True
     return False
 
 def update_user_token(username):
     """Tạo token mới cho username khi đăng nhập thành công"""
     new_token = str(uuid.uuid4())
-    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('UPDATE users SET token = ? WHERE username = ?', (new_token, username))
-    conn.commit()
-    conn.close()
+    db.collection("users").document(username).update({"token": new_token})
     return new_token
 
 def get_user_by_token(token): 
     """Tìm user dựa vào token (tự động đăng nhập)"""
-    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('SELECT username FROM users WHERE token = ?', (token,))
-    data = c.fetchall()
-    conn.close()
-    if data: 
-        return data[0][0]
+    docs = db.collection("users").where("token", "==", token).stream()
+    for doc in docs:
+        return doc.id
     return None
 
 def logout_user(username):
     """Xóa token khi đăng xuất"""
-    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('UPDATE users SET token = NULL WHERE username = ?', (username,))
-    conn.commit()
-    conn.close()
+    db.collection("users").document(username).update({"token": None})
+
+def create_new_session(username):
+    session_id = str(uuid.uuid4())
+    db.collection("sessions").document(session_id).set({
+        "username": username,
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "session_id": session_id
+    })
+    return session_id
 
 # --- Các hàm lấy lịch sử của đoạn chat --- 
 def save_message_to_db(username, session_id, role, content): 
-    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
-    c = conn.cursor()
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('INSERT INTO history (username, session_id, timestamp, role, content) VALUES (?, ?, ?, ?, ?)', 
-              (username, session_id, timestamp, role, content))
-    conn.commit()
-    conn.close()
+    db.collection("messages").add({
+        "session_id": session_id,
+        "username": username,
+        "role": role,
+        "content": content,
+        "timestamp": firestore.SERVER_TIMESTAMP
+    })
 
 def get_user_sessions(username):
-    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('''
-        SELECT session_id, MIN(timestamp) as start_time
-        FROM history
-        WHERE username = ?
-        GROUP BY session_id
-        ORDER BY start_time DESC
-    ''', (username,))
-    data = c.fetchall()
-    conn.close()
-    return data
+    "Lấy danh sách các session rồi sắp xếp theo thứ tự"
+    docs = db.collection("sessions").where("username", "==", username)\
+             .order_by("created_at", direction=firestore.Query.DESCENDING).stream()
+    sessions = []
+    for doc in docs:
+        data = doc.to_dict()
+        time_display = "Unknown"
+        if data.get("created_at"):
+            dt = data["created_at"]
+            time_display = dt.strftime("%Y-%m-%d %H:%M")
+        sessions.append((data["session_id"], time_display))
+    return sessions
 
 def load_history_by_session(session_id): 
-    conn = sqlite3.connect('interview_system.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('SELECT role, content FROM history WHERE session_id=? ORDER BY id', (session_id,))
-    data = c.fetchall()
-    conn.close()
-    return data
-
-# --- Khởi tạo Database ---
-init_db()
+    # Lấy tin nhắn cũ theo thứ tự thời gian
+    docs = db.collection("messages").where("session_id", "==", session_id)
+    messages = []
+    for doc in docs: 
+        data = doc.to_dict()
+        messages.append((data["role"], data["content"]))
+    return messages
 
 # --- Khởi tạo STATE ---
 if "username" not in st.session_state:
@@ -256,7 +243,7 @@ if "username" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
+    st.session_state.session_id = None
 if "chat_session" not in st.session_state:
     st.session_state.chat_session = None
 if "interview_active" not in st.session_state:
@@ -272,7 +259,7 @@ if not st.session_state.username and url_token:
     found_user = get_user_by_token(url_token)
     if found_user:
         st.session_state.username = found_user
-        st.toast(f"Đã khôi phục phiên làm việc của {found_user}")
+        st.toast(f"Chào mừng {found_user} đã quay trở lại!")
     else: 
         if "token" in st.query_params:
             del st.query_params["token"]
@@ -291,7 +278,7 @@ def login_page():
                 # Tạo và lưu token
                 token = update_user_token(username)
                 st.query_params["token"] = token # Gắn lên URL
-                st.success(f"Chúc mừng {username} quay trở lại!")
+                st.success(f"Chúc mừng {username} đã đến với AI Interview!")
                 st.rerun()
             else: 
                 st.error("Tên đăng nhập hoặc mật khẩu không chính xác")
@@ -313,6 +300,8 @@ def init_chat(api_key, job_position, experience_level, mode):
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash') 
+
+        st.session_state.session_id = create_new_session(st.session_state.username)
 
         # Xây dựng System Prompt dựa trên chế độ
         base_instruction = f"""
@@ -382,13 +371,14 @@ if not st.session_state.username:
 else: 
     with st.sidebar:
         st.write(f"Xin chào, **{st.session_state.username}**!")
-        if st.button("Đăng xuất"): 
+        if st.button("ĐĂNG XUẤT"): 
             logout_user(st.session_state.username) # Xóa token trong URL ở DB
             if "token" in st.query_params:
                 del st.query_params["token"]
             st.session_state.username = None
             st.session_state.interview_active = False
             st.rerun()
+        st.markdown("---")
         st.title("Cấu hình")
         api_key = os.getenv("GEMINI_API_KEY") or st.text_input("API Key", type="password")
 
@@ -400,7 +390,6 @@ else:
             captions=["Nhận xét sau từng câu trả lời", "Phỏng vấn liên tục, nhận xét cuối cùng"]
         )
         if st.button("🚀 Bắt đầu mới", type="primary", disabled=not api_key):
-            st.session_state.session_id = str(uuid.uuid4())
             if init_chat(api_key, job_position, experience_level, mode):
                 st.rerun()
             
