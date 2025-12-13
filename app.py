@@ -170,20 +170,42 @@ def get_db():
         if not firebase_admin._apps:
             if "firebase" in st.secrets: 
                 key_dict = dict(st.secrets["firebase"])
-                if "private_key" in key_dict: 
-                    key_dict["private_key"] = key_dict["private_key"].replace('\\n','\n')
+                
+                # [FIX MẠNH MẼ] Xử lý Private Key
+                if "private_key" in key_dict:
+                    raw_key = key_dict["private_key"]
+                    # 1. Thay thế ký tự xuống dòng bị escape
+                    fixed_key = raw_key.replace('\\n', '\n')
+                    # 2. Đảm bảo key có header và footer chuẩn
+                    if "-----BEGIN PRIVATE KEY-----" not in fixed_key:
+                        return None, "Private Key thiếu header '-----BEGIN PRIVATE KEY-----'"
+                    key_dict["private_key"] = fixed_key
+                
                 cred = credentials.Certificate(key_dict)
                 firebase_admin.initialize_app(cred)
             else: 
-                return None
-        return firestore.client()
+                return None, "Không tìm thấy mục [firebase] trong secrets.toml hoặc Secrets Cloud."
+        
+        return firestore.client(), None # Trả về (db, error_message)
+    except ValueError as ve:
+        return None, f"Lỗi định dạng Key (ValueError): {ve}"
     except Exception as e:
-        print(f"Firebase Error: {e}") # In lỗi ra terminal để debug nếu cần
-        return None
-db = get_db()
+        return None, f"Lỗi không xác định: {e}"
 
+# Gọi hàm và lấy kết quả
+db, err_msg = get_db()
+
+# Kiểm tra lỗi
 if db is None: 
-    st.error("Lỗi kết nối Firebase! Vui lòng kiểm tra lại!")
+    st.error("❌ KẾT NỐI FIREBASE THẤT BẠI")
+    st.warning(f"Chi tiết lỗi: {err_msg}")
+    st.info("""
+    👉 **Cách khắc phục trên Streamlit Cloud:**
+    1. Vào Manage App -> Settings -> Secrets.
+    2. Kiểm tra dòng `private_key`. Nó phải bắt đầu bằng `-----BEGIN PRIVATE KEY-----`.
+    3. Đảm bảo toàn bộ key nằm trong dấu ngoặc kép `""` hoặc ba dấu ngoặc kép `\"\"\"` nếu chia nhiều dòng.
+    4. Xóa hết và copy lại cẩn thận từ file JSON gốc.
+    """)
     st.stop()
 
 # --- Hàm mã hõa --- 
