@@ -5,6 +5,7 @@ import hashlib
 import uuid
 import os
 import firebase_admin
+import PyPDF2
 from firebase_admin import credentials, firestore
 from datetime import datetime
 from dotenv import load_dotenv
@@ -17,9 +18,18 @@ st.set_page_config(
     layout="wide"
 )
 
+USER_AVATAR = "👤"
+BOT_AVATAR = "🤖"
+
 # --- Giao diện --- 
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+
+    html, body, [class*="css"]  {
+        font-family: 'Inter', sans-serif;
+    }
+            
     /* --- 1. CỐ ĐỊNH NỀN CHÍNH --- */
     .stApp {
         /* Dùng fixed để nền không bao giờ bị trôi khi cuộn */
@@ -135,6 +145,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- Khởi tạo STATE ---
+if "username" not in st.session_state:
+    st.session_state.username = None
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "session_id" not in st.session_state:
+    st.session_state.session_id = None
+if "chat_session" not in st.session_state:
+    st.session_state.chat_session = None
+if "interview_active" not in st.session_state:
+    st.session_state.interview_active = False
+if "feedback_mode" not in st.session_state:
+    st.session_state.feedback_mode = False
+if "cv_content" not in st.session_state: 
+    st.session_state.cv_content = ""
+if "waiting_for_welcome" not in st.session_state:
+    st.session_state.waiting_for_welcome = False
+
 # --- Kết nối với Firebase --- 
 @st.cache_resource
 def get_db():
@@ -228,7 +256,7 @@ def save_message_to_db(username, session_id, role, content):
 
 def get_user_sessions(username):
     "Lấy danh sách các session rồi sắp xếp theo thứ tự"
-    docs = db.collection("sessions").where("username", "==", username)\
+    docs = db.collection("sessions").where(field_path="username",op_string= "==",value= username)\
              .order_by("created_at", direction=firestore.Query.DESCENDING).stream()
     sessions = []
     for doc in docs:
@@ -260,19 +288,22 @@ def load_history_by_session(session_id):
     
     # Trả về định dạng đúng cho Streamlit
     return [(m["role"], m["content"]) for m in temp_msgs]
-# --- Khởi tạo STATE ---
-if "username" not in st.session_state:
-    st.session_state.username = None
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "session_id" not in st.session_state:
-    st.session_state.session_id = None
-if "chat_session" not in st.session_state:
-    st.session_state.chat_session = None
-if "interview_active" not in st.session_state:
-    st.session_state.interview_active = False
-if "feedback_mode" not in st.session_state:
-    st.session_state.feedback_mode = False
+
+# --- Hàm xử lý file PDF ---
+def get_pdf_text(uploaded_file):
+    """Đọc nội dung file PDF"""
+    try:
+        reader = PyPDF2.PdfReader(uploaded_file)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text()
+        return text 
+    except Exception as e: 
+        return f"Lỗi đọc file: {e}"
+    
+def stream_generator(respone_stream): 
+    for chunk in respone_stream: 
+        yield chunk.text
 
 # --- Logic tự động đăng nhập --- 
 query_params = st.query_params
@@ -322,17 +353,23 @@ def login_page():
     
 # --- Logic Phỏng Vấn --- 
 
-def init_chat(api_key, job_position, experience_level, mode): 
+def init_chat(api_key, job_position, experience_level, mode, cv_text = ""): 
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash') 
 
         st.session_state.session_id = create_new_session(st.session_state.username)
 
+        # Thêm CV vào bối cảnh
+        cv_context = ""
+        if cv_text:
+            cv_context = f"\n\nĐây là CV của ứng viên:\n {cv_text}\nHãy đặt câu hỏi xoay quanh kinh nghiệm trong CV này nếu thấy phù hợp với nghề đang được phỏng vấn"
+
         # Xây dựng System Prompt dựa trên chế độ
         base_instruction = f"""
         Bạn là một nhà tuyển dụng chuyên nghiệp, sắc sảo cho vị trí {job_position} cấp độ {experience_level}.
         Luôn giao tiếp bằng Tiếng Việt.
+        {cv_context}
         """
         
         if mode == "Luyện tập (Practice)":
@@ -358,15 +395,23 @@ def init_chat(api_key, job_position, experience_level, mode):
             {"role": "user", "parts": [instruction]}
         ])
 
-        response = st.session_state.chat_session.send_message("Bắt Đầu Đi.")
+        # #Stream cho lời chào đầu tiên
+        # response = st.session_state.chat_session.send_message("Bắt Đầu Đi.", stream=True)
 
-        # Lưu vào state
-        st.session_state.messages = [{"role": "assistant", "content": response.text}]
-        # Lưu vào database
-        save_message_to_db(st.session_state.username, st.session_state.session_id, "assistant", response.text)
+        # # Lưu DB
+        # full_text = ""
+        # for chunk_text in response:
+        #     full_text += chunk_text.text
 
+        # # Lưu vào state
+        # st.session_state.messages = [{"role": "assistant", "content": full_text}]
+        # # Lưu vào database
+        # save_message_to_db(st.session_state.username, st.session_state.session_id, "assistant", full_text)
+
+        st.session_state.messages = []
         st.session_state.interview_active = True
         st.session_state.feedback_mode = False
+        st.session_state.waiting_for_welcome = True
         return True
     except Exception as e:
         st.error(f"Lỗi {e}")
@@ -384,9 +429,17 @@ def generate_final_feedback():
         Trình bày định dạng Markdown rõ ràng, đẹp mắt.
         """
         try:
-            response = st.session_state.chat_session.send_message(prompt)
-            st.session_state.messages.append({"role": "assistant", "content": response.text})
-            save_message_to_db(st.session_state.username, st.session_state.session_id, "assistant", response.text)
+            result_container = st.chat_message("assistant", avatar=BOT_AVATAR)
+            response = st.session_state.chat_session.send_message(prompt, stream=True)
+            # #Placeholder cho response
+            # feedback_placeholder = st.empty()
+            # full_text = ""
+            # for chunk in response:
+            #     full_text += chunk.text
+            #     feedback_placeholder.markdown(full_text)
+            full_text = result_container.write_stream(stream_generator(response))
+            st.session_state.messages.append({"role": "assistant", "content": full_text})
+            save_message_to_db(st.session_state.username, st.session_state.session_id, "assistant", full_text)
             st.session_state.feedback_mode = True
         except Exception as e:
             st.error(f"Lỗi: {e}")
@@ -415,6 +468,17 @@ else:
             ["Luyện tập (Practice)", "Phỏng vấn thử (Mock Test)"],
             captions=["Nhận xét sau từng câu trả lời", "Phỏng vấn liên tục, nhận xét cuối cùng"]
         )
+        # Widget CV
+        st.markdown("---")
+        st.subheader("📄 Hồ sơ năng lực (CV)")
+        uploaded_cv = st.file_uploader("Tải lên CV (PDF) để AI hỏi sát hơn", type="pdf")
+        
+        if uploaded_cv:
+            # Đọc file và lưu vào state
+            with st.spinner("Đang đọc CV..."):
+                cv_text = get_pdf_text(uploaded_cv)
+                st.session_state.cv_content = cv_text
+                st.success("Đã đọc xong CV!")
         if st.button("🚀 Bắt đầu mới", type="primary", disabled=not api_key):
             if init_chat(api_key, job_position, experience_level, mode):
                 st.rerun()
@@ -440,30 +504,52 @@ else:
     # Khung chat chính
     st.title("🤖 Phòng Phỏng Vấn Ảo")
     st.caption(f"Đang phỏng vấn vị trí: **{job_position}** | Chế độ: **{mode}**")
+    if st.session_state.cv_content:
+        st.caption("✅ Đã kích hoạt chế độ phân tích CV")
 
     # Hiển thị tin nhắn
     for message in st.session_state.messages: 
-        with st.chat_message(message["role"]):
+        avatar = USER_AVATAR if message["role"] == "user" else BOT_AVATAR
+        with st.chat_message(message["role"], avatar=avatar):
             st.markdown(message["content"])
     
+    # [NEW] XỬ LÝ LỜI CHÀO ĐẦU TIÊN (STREAMING)
+    # Kiểm tra nếu đang chờ lời chào và session đã active
+    if st.session_state.get("waiting_for_welcome") and st.session_state.interview_active:
+        if st.session_state.chat_session:
+            with st.chat_message("assistant", avatar=BOT_AVATAR):
+                # Gọi API
+                response_stream = st.session_state.chat_session.send_message("Bắt đầu đi.", stream=True)
+                # Stream ra màn hình
+                full_text = st.write_stream(stream_generator(response_stream))
+                
+                # Lưu vào state và DB sau khi stream xong
+                st.session_state.messages.append({"role": "assistant", "content": full_text})
+                save_message_to_db(st.session_state.username, st.session_state.session_id, "assistant", full_text)
+                
+                # Tắt cờ chờ
+                st.session_state.waiting_for_welcome = False
+                st.rerun() # Rerun để cập nhật state messages chính thức
+
+
     # Nhập số liệu (Chỉ hiện khi đang active)
     if st.session_state.interview_active and not st.session_state.feedback_mode: 
         if prompt := st.chat_input("Nhập câu trả lời của bạn..."):
             # 1. User
             st.session_state.messages.append({"role": "user", "content": prompt})
             save_message_to_db(st.session_state.username, st.session_state.session_id, "user", prompt)
-            with st.chat_message("user"):
+            with st.chat_message("user", avatar=USER_AVATAR):
                 st.markdown(prompt)
         
             # 2. Bot
             if st.session_state.chat_session: 
-                with st.chat_message("assistant"): 
+                with st.chat_message("assistant", avatar=BOT_AVATAR): 
                     with st.spinner("Nhà Tuyển Dụng đang suy nghĩ..."):
                         try: 
-                            response = st.session_state.chat_session.send_message(prompt)
-                            st.markdown(response.text)
-                            st.session_state.messages.append({"role": "assistant", "content": response.text})
-                            save_message_to_db(st.session_state.username, st.session_state.session_id, "assistant", response.text)
+                            response = st.session_state.chat_session.send_message(prompt, stream=True)
+                            full_response = st.write_stream(chunk.text for chunk in response)
+                            st.session_state.messages.append({"role": "assistant", "content": full_response})
+                            save_message_to_db(st.session_state.username, st.session_state.session_id, "assistant", full_response)
                         except Exception as e:
                             st.error(f"Lỗi: {e}")
     if mode == "Phỏng vấn thử (Mock Test)" and st.session_state.interview_active and not st.session_state.feedback_mode:
