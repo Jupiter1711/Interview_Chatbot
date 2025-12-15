@@ -9,12 +9,19 @@ import PyPDF2
 from firebase_admin import credentials, firestore
 from datetime import datetime
 from dotenv import load_dotenv
+from PIL import Image
 
 load_dotenv()
 # --- Cấu hình --- 
+page_icon= "👔"
+try: 
+    if os.path.exists("logo.png"):
+        page_icon = Image.open("logo.png")
+except Exception:
+    pass
 st.set_page_config(
     page_title= "DudesChaseMoney",
-    page_icon= "👔",
+    page_icon= page_icon,
     layout="wide"
 )
 
